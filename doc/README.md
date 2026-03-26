@@ -2,16 +2,16 @@
 
 ## Group Members
 - **Name:** [Robert Thomas Bunch]
-- **Penn Key:** [tbunch]
+
 
 - **Name:** [Spencer Lee]
-- **Penn Key:** [spenlee]
+
 
 - **Name:** [Anirudh Chakravarty Kumar]
-- **Penn Key:** [kumar5]
+
 
 - **Name:** [Aditya Pratap Singh]
-- **Penn Key:** [aditya27]
+
 
 ## Submitted Source Files
 
