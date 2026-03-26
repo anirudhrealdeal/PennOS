@@ -1,0 +1,889 @@
+PennOS
+“UNIX is basically a simple operating system, but you have to be a genius to understand the simplicity” - Dennis Ritchie
+
+Table of Contents
+Table of Contents
+
+PennOS
+Table of Contents
+Collaboration
+Overview
+Specification
+Function Terminology
+Maintaining the Abstraction
+1. PennOS Kernel
+1.1 Process-Related Required Functions
+1.2 Signals in PennOS
+1.3 Process Statuses
+1.4 Zombies and Waiting
+1.5 Priority Scheduler
+1.6 Programming with spthreads
+1.7 Clock Ticks
+1.8 Priority Queues
+1.9 Idling
+2. PennFAT File System
+2.1 FAT File System Regions
+2.2 FAT File Systems and File System Blocks
+2.3 Standalone PennFAT
+2.3.1 File Descriptors and Global File Descriptor Table
+2.3.2 PennFAT Kernel Level Functions
+2.3.4 Standalone PennFAT Commands
+2.3.5 Loading the FAT into Memory
+2.3.6 Error Handling in Standalone PennFAT
+2.4 File System and Operating System Interaction
+2.5 Required File System and Related User-Level System Calls
+3. Shell
+3.1 Shell Built-ins
+3.2 Shell Scripts
+4. PennOS Logging
+5. Arguments to PennOS
+6. Error Handling
+7. Memory Errors
+Developing Your Code
+Repository Creation
+Submission
+Makefile
+Repository Structure
+Companion Document
+Grading
+Milestone 0 Expectations
+Milestone 1 Expectations
+Extensions
+Attribution
+Examples
+pthread Round Robin
+Provided Makefile
+Spthread Source Files
+Logger Examples
+
+Collaboration
+This is a group project. You must work in groups of four or five. You are expected to follow along to Ed as updates and clarifications made there will be reflected in the final grading. You may reuse code from previous projects, but only code you wrote.
+
+ You are forbidden to reuse any code obtained from the internet or from previous semesters. Violators will be sent to the Office of Student Conduct and will receive a failing grade for the course.
+
+
+Overview
+In this assignment you will implement PennOS, your own UNIX-like operating system. PennOS is designed around subsystems that model those of standard UNIX. This will include programming a basic priority scheduler, FAT file system, and user shell interactions. Unlike a real operating system, you will not be required to actually boot on hardware; rather, your PennOS will run as a guest OS within a single process running on a host OS.
+
+The following specification provides a road map for completing this project; however, as you develop your code, you may find it necessary to expand upon the specification. Feel free to add additional shell/user level functions to support debugging, as long as you mostly adhere to the provided interfaces in this document. Not only is this encouraged, but it is expected. If you are ever in doubt about a design decision, ask your friendly TAs, and be sure to document such changes in your README and companion document.
+
+
+Specification
+There are two states in which an operating system exists: (1) kernel land and (2) user land. During execution, an operating system switches between these two states continuously. As an example, consider what happens when a program issues a system call. First, the system call is executed in user land which hits a hook; that is, the running process actually calls the system call. Next, the operating system must handle the system call, switching from user to kernel land. Once the system call completes, the operating system returns control to the calling process, returning back to user land. Unlike in a real operating system, however, this separation between user land and kernel land is simply taken on faith. You are not required to implement a run-time mechanism to enforce this separation.
+
+To be clear, there should be a difference between system calls and user level functions. In a real system there is usually a run-time mechanism (such as invoking some special assembly and changing permission levels), but in pennOS both user level and system level functions are just functions. You will still have to maintain a separation of sorts, but this will be discussed more in a later section of the document.
+
+In the previous projects, you have interacted with the operating system at the user land level, and in this project, you will take a peek behind the curtain at kernel land. Well, not exactly, but you will simulate the basic functionality of an operating system by programming your own operating system simulator PennOS. Using the pthread library, you will implement a basic priority scheduler; additionally, you will implement a FAT file system for your operating system to mount, and a basic shell and programming API for a user to interact with your operating system.
+
+Unlike a real operating system, your PennOS is not required to boot on hardware (or handle devices in general); instead, it will run as a single process on a host OS. You will use the spthread library which is a thin wrapper around the pthread library that allows for a thread to be suspended and run. The API will allows one process to split its resources across multiple instances. spthread is utilizing kernel threads and so is in some regard managed by the host operating system, but you will need to implement a SIGALRM-based scheduler to manage the threads, handle sleeping, waiting, etc.
+
+Another critical part of an operating system is handling file reads and writes. Your operating system will mount a single file system, PennFAT: a simple file system implementation based on FAT. Your PennFAT implementation will be stored within a single file on the host file system, and will be mounted by PennOS in a loop back like manner. Additionally, unlike traditional file systems, PennFAT is only required to handle files within a single top level directory. You are required to allow the creation, modification, and removal of files under the top level directory.
+
+The last part of your operating system is providing user land interaction via a simple shell. You will program this shell using the user land system calls providing by PennOS. Your shell will provide job control, stdin/stdout redirection, and a functional set of built-in commands for testing and exploring your operating system.
+
+One last note: this is a long and complex project that will take you many, many hours to complete. This document can only provide you with a primer of the innumerable challenges you will face; read it carefully, but be sure to use other resources as well. In particular, read the manual pages, and ask questions of your friendly TAs. Likely, this will be the largest program you have yet written as a student. Devise a game plan, map out functions together, design how the various routines of PennOS will interact, and assign each other tasks thoughtfully so the pieces fit together at the end.
+
+Remember, a lot of small, easy programs equal one large, complex program. Don’t try to conquer the entire project in one go: it is organized such that splitting up tasks into discrete components and writing modular code are strategies that will be rewarded.
+
+ While splitting up components is useful and writing modular code can be rewarded, this is often interpreted incorrectly.
+
+Some will split up code so that two people work on the Kernel and Shell, while the other two work on PennFAT. This can work, but this often makes integrating very difficult and time consuming. Not only this but most groups who split it in this manner complain that much of the learning was in implementing the kernel. Do not let this be you or your group. Make sure everyone does a bit of everything.
+
+Students may specialize in the kernel while others specialize in the FAT while still contributing by writting certain functions in the various portions of PennOS.
+
+Kernels and shells that are designed without thinking about the FAT (and vice-versa to a lesser extent) often need a lot of refactoring to get the two parts to cooperate.
+
+To write modular code is to write helper functions and use them. Do not implement the PennFAT cat function as one 600+ line function. That function ends up being a mess and taking a lot of time to debug. Instead one could write helper functions that perform functionality that will probably need to be reused again in other functions.
+
+For example, functions like k_write (generic function to write to a file in PennFAT) or functions like k_get_block(int n) which get the n’th block number of a file. These are examples that you do not have to follow, but the cat function (and others) could use these helpers to simplify their code.
+
+
+Function Terminology
+As PennOS seeks to have you create your own implementation of an operating system, we will not be allowing you to simply push all of the functionality down to the host operating system you are currently running on. To this end, you may not bypass your own kernel/file system in the shell or user programs by calling things like fork(2), read etc. directly. These should be replaced by your own kernel/file system functions like s_read and s_spawn. If you use any functions that are not in the spirit of this assignment, you will receive a ZERO.
+
+On the other hand, unless otherwise forbidden, you may use any userspace library functions you want (such as those found in string.h). Libraries that implement kernel/file system functionalities described in this write-up, e.g <sys/wait.h>, are forbidden.
+
+Your operating system will provide a number of different functions and interfaces. The following prefixes indicate how the functions are to be used in order to mimic kernel- and user-level abstractions in this project:
+
+Prefix	Abstraction Level	Can call…
+u_	User-level	Can call other u_ or s_ functions in implementation
+s_	System call	Can call other s_ or k_ functions in implementation
+k_	Kernel-level	Can call other s_ or k_ functions in implementation
+s_ and k_ functions are similar in that both can modify kernel-level objects. The key difference is that s_ are system calls, which act as an interface for user-level programs to interact with the kernel. It may be helpful to think of k_ functions as kernel-level helpers for implementing the s_ functions. In addition to these prefixes, we recommend keeping the implementation of these functions to separate files so that their distinctions are clear.
+
+The function declarations provided later in this specification are suggestions for you to build upon. You will find it useful to add additional kernel/user-level functions or system calls as you see fit, as long as they are in the spirit of the assignment.
+
+
+Maintaining the Abstraction
+You should NOT expose any kernel-level (k_) functions to the user (e.g. the shell). This can be done through careful inclusion of header files. For example:
+
+say you have two header/code file pairs, one named kernel.h and kernel.c that contain your k_ functions and one named sys_calls.h and sys_calls.c that contain your s_ functions (which call your k_ functions).
+
+In order to maintain the abstraction, you would put the line #include "kernel.h" in the sys_call.c file instead of sys_call.h so that when you include sys_call.h in your shell, you have can call system calls, but not kernel-level functions.
+
+You should also be careful to not expose any file system internal functions to the kernel and vice versa in order to avoid breaking the abstractions in between them. Your kernel may still need to call “interface” functions of your File System, but the kernel should not be directly manipulating the FAT or diving too into the details of the file system. Everything the Kernel may need from the file system should be achievable by just calling a corresponding file system function.
+
+
+1. PennOS Kernel
+Your PennOS operating system will run as a single process on the host OS (e.g., Linux on your Docker Container). That is, each of the “processes” in PennOS is really the same process as PennOS according to the host operating system. However, to imitate real processes within PennOS, each “process” will be implemented as threads that are independently scheduled by your implementation of the kernel.
+
+To accomplish this task you will be using a provided wrapper around the pthread library called spthread. If you are issuing calls to fork(2), exec(2), or wait(2), you are doing something very wrong.
+
+Your PennOS should have notion of a process control block (PCB), which is structure that describes all the needed information about a running process (aka thread). In the PCB, you will have to at least store (but certainly not limited to):
+
+a handle to the spthread
+PID, parent PID, child PID(s)
+open file descriptors
+priority level
+process state
+You must describe your PCB structure in your companion document.
+
+If you would like, you can refer to Steven’s Advanced Programming in the UNIX Environment and Tanenbaum’s Modern Operating Systems for more information about data normally stored in a PCB.
+
+
+1.1 Process-Related Required Functions
+Your operating system must provide the following system call functions for interacting with PennOS process creation:
+
+ Reminder: you do not need to use these functions exactly as they are described. You are free to make modifications on the parameters they take, but a function doing this functionality should be somewhere in your code.
+
+/**
+ * @brief Create a child process that executes the function `func`.
+ * The child will retain some attributes of the parent.
+ *
+ * @param func Function to be executed by the child process.
+ * @param argv Null-terminated array of args, including the command name as argv[0].
+ * @param fd0 Input file descriptor.
+ * @param fd1 Output file descriptor.
+ * @return pid_t The process ID of the created child process.
+ */
+pid_t s_spawn(void* (*func)(void*), char *argv[], int fd0, int fd1);
+
+/**
+ * @brief Wait on a child of the calling process, until it changes state.
+ * If `nohang` is true, this will not block the calling process and return immediately.
+ *
+ * @param pid Process ID of the child to wait for.
+ * @param wstatus Pointer to an integer variable where the status will be stored.
+ * @param nohang If true, return immediately if no child has exited.
+ * @return pid_t The process ID of the child which has changed state on success, -1 on error.
+ */
+pid_t s_waitpid(pid_t pid, int* wstatus, bool nohang);
+
+/**
+ * @brief Send a signal to a particular process.
+ *
+ * @param pid Process ID of the target proces.
+ * @param signal Signal number to be sent.
+ * @return 0 on success, -1 on error.
+ */
+int s_kill(pid_t pid, int signal);
+
+/**
+ * @brief Unconditionally exit the calling process.
+ */
+void s_exit(void);
+Your operating system will also provide at least the following system calls for interacting with the scheduler:
+
+/**
+ * @brief Set the priority of the specified thread.
+ *
+ * @param pid Process ID of the target thread.
+ * @param priority The new priorty value of the thread (0, 1, or 2)
+ * @return 0 on success, -1 on failure.
+ */
+int s_nice(pid_t pid, int priority);
+
+/**
+ * @brief Suspends execution of the calling proces for a specified number of clock ticks.
+ *
+ * This function is analogous to `sleep(3)` in Linux, with the behavior that the system
+ * clock continues to tick even if the call is interrupted.
+ * The sleep can be interrupted by a P_SIGTERM signal, after which the function will
+ * return prematurely.
+ *
+ * @param ticks Duration of the sleep in system clock ticks. Must be greater than 0.
+ */
+void s_sleep(unsigned int ticks);
+Additionally, your operating system will have the following kernel-level functions:
+
+/**
+ * @brief Create a new child process, inheriting applicable properties from the parent.
+ *
+ * @return Reference to the child PCB.
+ */
+pcb_t* k_proc_create(pcb_t *parent);
+
+/**
+ * @brief Clean up a terminated/finished thread's resources.
+ * This may include freeing the PCB, handling children, etc.
+ */
+void k_proc_cleanup(pcb_t *proc);
+Note that these functions are a starting point. Again, feel free to add more functions as needed, but be sure to maintain the abstraction between user-level and kernel-level.
+
+
+1.2 Signals in PennOS
+Your PennOS will not have traditional signals and signal handlers (however, the host operating system may deliver signals that you must handle). Instead, signaling a PennOS process indicates to PennOS that it should take some action related to the signaled thread, such as change the state of a thread to stopped or running. Your operating system will minimally define the following signals:
+
+P_SIGSTOP: a thread receiving this signal should be stopped
+P_SIGCONT: a thread receiving this signal should be continued
+P_SIGTERM: a thread receiving this signal should be terminated
+If you would like to add additional signals, be sure to document them and their functionality in your companion document file.
+
+To be clear, you should not need to call the signal function, pthread_kill or other such functions to deliver these signals through the host operating system. Your code should instead handle these “signals” their own way, even if they are not used like how we have used signals in past assignments.
+
+
+1.3 Process Statuses
+Threads can exists in four states: running, stopped, blocked, or zombied. A running thread may be scheduled; however, a stopped, blocked, or zombied thread should not be. A thread should only become stopped if it was appropriately signaled via s_kill. A thread should only be blocked if it made a call to s_waitpid or s_sleep (see below).
+
+PennOS will provide at least the following user level functions/macros that will return booleans based on the status returned from s_waitpid.
+
+P_WIFEXITED(status): return true if the child terminated normally. That is, by a call to s_exit or by returning.
+P_WIFSTOPPED(status): return true if the child was stopped by a signal.
+P_WIFSIGNALED(status): return true if the child was terminated by a signal. That is, by a call to s_kill with the S_SIGTERM signal.
+
+1.4 Init, Zombies and Waiting
+As processes complete, it may not always be the case that their parent processes can wait on them immediately. As a result, you must queue up these processes so that the parent may wait on them in the future. These terminated but unreaped processes are zombies.
+
+If at any time the parent thread exits prior to waiting on zombie children, the zombie children will have INIT become their new parent. Your init should reap the zombies through s_waitpid and will eventually reap the other children once they terminate (either by exiting normally or being signalled).
+
+To do this, we highly recommend having an INIT process similar to how unix does. The INIT process is the ancestor of all processes and is started on boot. That means it is the first process that your OS should start up, and then init will create the shell process. One main thing that the init process does, is that all orphan child processes will have INIT become their new parent and init will clean up those processes (through something like s_waitpid()).
+
+Additionally, as noted above, other child process state changes can cause a s_waitpid() to return. In UNIX, a child process that transitions from running to stopped would issue a SIGCHLD signal. Your operating system should have similar functionality for parent process to learn of similar state changes. In your PennOS kernel-land implementation of s_waitpid(), you may find it useful to maintain other queues of “waitable” children, not just zombie children.
+
+
+1.5 Priority Scheduler
+Perhaps the most critical part of any operating system is the scheduler. This is the part of your operating system that chooses which program to run next. As described in class, most operating systems, including Linux, use a priority queue based scheduler. In your PennOS, you will also implement a priority scheduler, although it will be a much more simplified version with a fixed quanta.
+
+Your implementation of PennOS should assume a single core CPU. Your kernel should be running only 1 thread at any given point in time. However, to create the illusion of concurrently running multiple processes, it will switch between running different threads rapidly.
+
+
+1.6 Programming with spthreads
+spthread is a wrapper that we have implemented around the pthread library. This wrapper allows us to have better control of scheduling execution order of the threads and switch between them.
+
+We have provided a sample program that demonstrates how to switch between them in a round-robin fashion. Familiarize yourself with this code and how spthread works. Since this is a wrapper around the pthread library with added helpers, you may find documentation and example code on pthread helpful as well.
+
+To understand how to utilize this for your project, you may want to consider:
+
+What happens when a signal is delivered?
+How do you stop and start a specific thread?
+How can a thread temporarily prevent being suspended by another thread?
+How do you track the currently running process?
+How can you pass different numbers and types of arguments to spawned processes?
+
+1.7 Clock Ticks
+You will schedule a SIGALRM signal to be delivered to your operating system every 100 milliseconds. We refer to this event as a clock tick, and on every tick, PennOS will run the scheduler which will choose which process to run next. This may be any process that is runnable (i.e. not zombied, blocked, nor stopped) to execute, including the shell. To set an alarm timer at millisecond granularity, refer to setitimer(2). Note that since your operating system is relying on SIGALRM, non-kernel functions may not block SIGALRM.
+
+We will refer to the period between two clock ticks as a quantum (quanta for plural).
+
+
+1.8 Priority Queues
+Your operating system will have three priority levels: 0, 1, and 2. As in standard UNIX, the lower a priority level, the more heavily the “process” should be scheduled
+
+Child threads created by k_proc_create should have a default priority level of 1, unless otherwise specified. For example, the shell should execute with priority level 0 because it is interactive. Init should execute with priority leveo 0 as well.
+
+Your priority queues will be relative. Threads scheduled with level 0 should run 1.5 times more often as threads scheduled with priority level 1, which run 1.5 times more often as threads scheduled with priority level 2. This means that threads scheduled with level 0 will run 2.25 times more often as threads scheduled with priority level 2.
+
+Within each priority queue, the threads are selected in a round robin format, and each queue must be implemented as a linked list or vector. You may reuse your linked list or vector implementation from previous projects. The main thing is that you are not allowed to use fixed size arrays for your queues. You must also ensure that no thread is starved.
+
+As an example, consider the scheduling of the following threads with these priority levels:
+
+shell priority level 0
+sleep, priority level 1
+cat, priority level 1
+Given each quantum is 100 milliseconds, after 10 seconds, what is the proportion of quanta for each process?
+
+First, there are 10 quanta per second, which means a total of 100 quanta in 10 seconds.
+Of the available quanta, 60 quanta will be used for priority level 0, (that is the shell), since it must be scheduled 1.5 times as often. Of the remaining 40 quanta, 20 quanta will be used for sleep, and 20 quanta for cat.
+To verify the correctness of your scheduler, you will implement a detailed logging facility that will generate a log entry for every clock tick. The specification of the log format is described in the section PennOS Logging.
+
+
+1.9 Idling
+When all processes in the scheduler queues are blocked, the scheduler needs to decide what to do. It should not keep busy waiting in a while loop until a process is ready to be scheduled as this would spike the CPU usage of PennOS up to 100%, when it should actually be 0% (since the OS isn’t actually doing anything).
+
+To get past this, you should leverage sigsuspend(2), which will suspend the calling thread until a signal is delivered to it, resulting in 0% CPU usage.
+
+The scheduler in your kernel should idle only when all other processes are blocked and the scheduler has no real process to schedule. Correct usage of idling is as follows: The shell spawns a new process sleep 200. The child process for sleep will be blocked for 200 clock ticks, and the shell will be blocked waiting for sleep to terminate. At this point, all the scheduler queues are empty and for each clock tick until sleep finishes, the scheduler can idle.
+
+
+2. PennFAT File System
+Your operating system will mount its own file system, PennFAT, based on FAT16. (For references, see Chapter 4.3.2 in Tanenbaum 4th edition, pages 285-286.) You are only required to implement the root directory of PennFAT.
+
+
+2.1 FAT File System Regions
+A FAT file system has mainly two regions: the FAT region which hosts the File Allocation Table (FAT), and the data region which stores the files (including directory files). The block numbering of PennFAT’s data region begins at 1.
+
+
+2.2 FAT File Systems and File System Blocks
+Conceptually, you can think of a file as a sequence of fixed-size blocks and a file system as a way to find the right blocks for a file in the right order. A FAT provides a simple way to do this by storing links between physical blocks of a file. Placed at the beginning of the file system before any block, the FAT has a predetermined size and can be easily mapped into memory. This is also its greatest disadvantage: being of fixed size, the FAT also limits the size of the file system.
+
+The FAT of PennFAT consists of a predetermined number of entries. It is specified when the filesystem is first formatted using the mkfs command, which dictates how the FAT and your file system as a whole should be formatted. The least significant byte (LSB) of the first entry of the FAT specifies the size of each block with the mapping displayed below:
+
+LSB	Size (bytes)
+0	256
+1	512
+2	1024
+3	2048
+4	4096
+The most significant byte (MSB) of the first entry of the FAT will be used to calculate the size of the FAT, with the MSB ranging from 1-32 (numbers outside of this range will be considered an error). The size of your FAT will be:
+
+FAT size = block size * number of blocks in FAT
+and with each entry of the FAT consisting of 2 bytes, the number of entries in your FAT will be:
+
+# of FAT entries = block size * number of blocks in FAT / 2
+In the figure below, each row (table entry) corresponds to a block in the file system and the value (Link) represents the next block number of the file (or 0xFFFF to denote the last block of the file). In other words, each table entry is a link to the table entry for the next block of the file
+
+Index	Link
+0	0x2004 <— MSB=0x20 (32 blocks in FAT), LSB=0x04 (4K-byte block size)
+1	0xFFFF <— Block 1 is the only block in the root directory file
+2	5 <— File A starts with Block 2 followed by Block 5
+3	4 <— File B starts with Block 3 followed by Block 4
+4	0xFFFF <— last block of File B
+5	6 <— File A continues to Block 6
+6	0xFFFF <— last block of File A
+…	…
+Note that we would not be able to tell that File A annd File B start at the blocks they start at without reading the corresponding file’s directory entry.
+
+Like other FAT16 variants, 0 denotes a free block, and 0xFFFF the last block of a file. (Thus, the maximum possible block number for PennFAT is 2^16 − 2)
+
+With each FAT entry representing a file block, there will be a total of:
+
+Data region size = block size * (number of FAT entries - 1)
+We subtract 1 here because the first entry (fat[0]) in the FAT is used to sore the filesystem formatting information, so it does not have a corresponding block. (This is also why the block numbering of the data region begins at 1.) Consequently, fat[1] references Block 1 which will always be the first block of the root directory file (the directory file may encompass multiple blocks as it grows).
+
+A directory file consists of directory entries, each of which stores metadata about another file (including a directory file). PennFAT has a 64-byte fixed directory entry size. The structure of the directory entry as stored in the filesystem is as follows:
+
+char name[32];
+uint32_t size;
+uint16_t first_block;
+uint8_t type;
+uint8_t perm;
+time_t mtime;
+// The remaining 16 bytes are reserved (e.g., for extensions)
+char name[32]: 32-byte null-terminated file name. name[0] also serves as a special marker
+0: end of directory
+1: deleted entry; the file is also deleted
+2: deleted entry; the file is still being used
+Note Above are literally values 0, 1, and 2. NOT characters ‘0’, ‘1’, and ‘2’!
+uint32_t size: 4-byte number of bytes in file
+uint16_t first_block: 2-byte number indicating the first block number of the file (undefined if size is zero)
+uint8_t type: 1-byte number for the type of the file, which will be one of the following:
+0: unknown
+1: a regular file
+2: a directory file
+4: a symbolic link
+Note Read more about symbolic links here. This could be a possible extension.
+uint8_t perm: file permissions, which will be one of the following:
+0: none
+2: write only
+4: read only
+5: read and executable (shell scripts)
+6: read and write
+7: read, write, and executable
+time_t mtime: creation/modification time as returned by time(2) in Linux
+By iterating over the directory files, all files in the file system can be enumerated. To find a block in the file system using a FAT entry, you will use lseek(2). For example, given a FAT entry for the value 5, you can find that block in the file containing your PennFAT by the following call to lseek:
+
+lseek(fs_fd, fat_size + block_size * 4, SEEK_SET)
+where fat_size is the size of the FAT and block_size is the size of a block
+
+
+2.3 Standalone PennFAT
+Your file system itself will exist as a single binary file on the host OS. A simple shell starter code (prompt, read input, execute command) will be provided for you to fully implement in order to build your standalone pennFAT, with its appropriate function calls. This will allow for interaction with your file system without an operating system implementation. Note this is only the pseudocode, you should be filling this in with your code and also be implementing the PennFAT routines. The information about routines can be found in section 2.3.6.
+
+You will provide a single standalone program, separate from the final PennOS executable, called pennfat, which doesn’t have any arguments.
+
+Just like the previous shells you’ve made so far, your Standalone PennFAT should ignore SIGINT and SIGTSTP, and only exit on Ctrl+D.
+
+For any makefile guide, take a look at the makefile section.
+
+
+2.3.1 File Descriptors and Global File Descriptor Table
+Classically, an operating system will store a reference to a file descriptor (an integer) for each open file, as well as a structure describing each file the Operating System is currently using. This structure will save information such as the mode of file and offset pointers that indicate where subsequent reads or writes should take place. Each user-level process will The user side will reference a file by its file descriptor and manipulate the file via the user level interface described below.
+
+Note that the file system-related system calls are abstraction layers and should not care about the format of the underlying file system. That is, consider what must occur when an operating system has mounted multiple file systems of different types. When there is a call to read(2) for a particular file descriptor, the operating system will determine on which file system variant the file lives (e.g., FAT32, ext3, etc.) and then call the appropriate file system dependent function to perform the read operation (which usually is provided by module).
+
+Within your standalone PennFAT, you should devise some representation of File Descriptors and the Kernel-Level Global File Descriptor Table. You must design each structure so that a file is addressable with its integer file descriptor, and its information is saved in a structure in a way that is indexable by the file descriptor.
+
+You must also reserve the standard file descriptors that relate to STDIN/STDOUT/STDERR as to not complicate later integrations. These will receive descriptors 0/1/2.
+
+A recommended starting point for this is some one dimensional array or list of type void*. You should pass a file descriptor into each of the following commands that you should implement for PennFAT.
+
+
+2.3.2 PennFAT Kernel Level Functions
+Your standalone FAT will provide at least the following functions for file manipulation.
+
+k_open(const char *fname, int mode) open a file name fname with the mode mode and return a file descriptor. The allowed modes are as follows:
+
+F_WRITE - writing and reading, truncates if the file exists, or creates it if it does not exist. Only one instance of a file can be opened in F_WRITE mode; error if attempted to open a file in F_WRITE mode more than once
+F_READ - open the file for reading only, return an error if the file does not exist
+F_APPEND - open the file for reading and writing but does not truncate the file if exists; additionally, the file pointer references the end of the file.
+
+Note It may be useful to define some additional helper functions, such as one which will traverse the root directory block by block and check each block for the filename given. It may also be useful to define a helper function that will need to find the next available empty index within the fat and then update the root accordingly.
+k_open returns a file descriptor on success and a negative value on error. What characters are allowed in filenames? You may follow the POSIX standard, linked here
+
+k_read(int fd, int n, char *buf)
+read n bytes from the file referenced by fd. On return, k_read returns the number of bytes read, 0 if EOF is reached, or a negative number on error. Note This function requires some thought, and will need to get the first block number of the file, navigate to it using lseek(2), and read the appropriate number of bytes, possible traversing multiple blocks.
+
+k_write(int fd, const char *str, int n)
+write n bytes of the string referenced by str to the file fd and increment the file pointer by n. On return, k_write returns the number of bytes written, or a negative value on error. Note that this writes bytes not chars, these can be anything, even '\0'
+
+Note Note that it is possible that a new block will be needed, in which case a fresh block allocation will have to occur and an update to the FAT will be necessary.
+
+k_close(int fd)
+close the file fd and return 0 on success, or a negative value on failure.
+
+k_unlink(const char *fname)
+remove the file. Be careful how you implement this, like Linux, you should not be able to delete a file that is in use by another process. Furthermore, consider where updates will be necessary. You do not necessarily need to clear the previous data in the data region, but should at least note this area as ‘nullified’ or fresh and ready to write to, elsewhere.
+
+k_lseek(int fd, int offset, int whence)
+reposition the file pointer for fd to the offset relative to whence. You must also implement the constants F_SEEK_SET, F_SEEK_CUR, and F_SEEK_END, which reference similar file whences as their similarly named counterparts in lseek(2). Note that this could require updates to the metadata of the file, for example, if the new position of n exceeds the files previous filesize!
+
+k_ls(const char *filename)
+List the file filename in the current directory. If filename is NULL, list all files in the current directory. This should act as very similar to posix, displaying the first block of the file, its permissions (you can leave this for the time being, chmod will be required to be implemented later), size, latest modification timestamp and filename.
+
+
+2.3.4 Standalone PennFAT Commands
+With the above kernel-level functions, you will implement the following routines for the Standalone PennFAT program.
+
+Key:
+
+CAPITAL: Capitalized words are filenames
+...: This means that we can optionally have multiple of the preceding element
+[ ]: This means that what comes in brackets are optional arguments
+Standalone PennnFAT Routines:
+
+The first three routines are special routines to make your filesystem binary, mount the binary to memory, and unmount it from memory. These functions can be implemented with UNIX’s standard system calls. These functions should print error messages and reprompt if any underlying C system calls fail.
+
+mkfs FS_NAME BLOCKS_IN_FAT BLOCK_SIZE_CONFIG
+Creates a PennFAT filesystem in the file named fs_name. The number of blocks in the FAT region is blocks_in_fat (ranging from 1 through 32), and the block size is 256, 512, 1024, 2048, or 4096 bytes corresponding to the value (0 through 4) of block_size_config. Can ONLY be called if there are no currently mounted filesystem. Prints “unexpected command” error if filesystem is currently mounted.
+
+mount FS_NAME
+Mounts the filesystem named fs_name by loading its FAT into memory. Prints “unexpected command” error if filesystem is currently mounted. Check this section to see how to load your binary filesystem to memory.
+
+unmount
+Unmounts the currently mounted filesystem. Prints “unexpected command” error if no filesystem is mounted
+
+The following set of routines can ONLY be executed if a filesystem is currently mounted in memory. Also, you may only use your implemented kernel-level system calls (k_functions) to implement these unless specified below.
+
+touch FILE ...
+Creates the files if they do not exist, or updates their timestamp to the current system time.
+
+mv SOURCE DEST
+Renames SOURCE to DEST.
+
+rm FILE ...
+Removes the files.
+
+cat FILE ... [ -w OUTPUT_FILE ]
+Concatenates the files and prints them to stdout by default, or overwrites OUTPUT_FILE. If OUTPUT_FILE does not exist, it will be created. (Same for OUTPUT_FILE in the commands below.)
+
+cat FILE ... [ -a OUTPUT_FILE ]
+Concatenates the files and prints them to stdout by default, or appends to OUTPUT_FILE.
+
+cat -w OUTPUT_FILE
+Reads from the terminal and overwrites OUTPUT_FILE.
+
+cat -a OUTPUT_FILE
+Reads from the terminal and appends to OUTPUT_FILE.
+
+cp [ -h ] SOURCE DEST
+Copies SOURCE to DEST. With -h, SOURCE is from the host OS.
+
+cp SOURCE -h DEST
+Copies SOURCE from the filesystem to DEST in the host OS.
+
+chmod Similar to chmod(1) in the VM.
+
+ls
+List all files in the directory, similar to ls -il in bash. For example:
+
+  2 -rw 30000 Nov 7 01:00 up-to-thirty-one-byte-file-name
+120 -r- 1000 Oct 31 21:59 Posix-file_name.2
+The columns above are first block number, permissions, size, month, day, time, and name.
+
+Note that you should be using k_functions to implement each command’s functionality, unless you are interacting with the host OS. This means that if you are using C system calls such as open(2), read(2), write(2) in your implementation of cat, you are doing something wrong. You should be using k_open, k_read, and k_write instead. The functionality you implement for k_functions should make the implementations of command simple.
+
+The ONLY case you may use the C system calls is when you are interacting with the host OS. For example, the cp SOURCE -h DEST command, when specified with the -h flag, you will have to read the contents of a file from the PennFAT filesystem, and write to a file in the host OS. You must use k_read to read from the PennFAT filesystem, but may use write(2) to write to a file in the host OS.
+
+Hint This means that even ls can simply be a wrapper around k_ls, a function you already implemented
+
+The purpose of the pennfat program is to test your file system’s functionality, independent of your PennOS. The functionality of both kernel-level functions and PennFAT commands will be necessary for Milestone 1.
+
+2.3.5 Loading the FAT into Memory
+When mounting your PennFAT filesystem, you will likely find it useful to mmap(2) the FAT region directly into memory. This way you will have copy-on-write for free. Here is a code snippet (minus error checking) to get you started on this process:
+
+#include <stdint.h>
+#include <sys/mman.h>
+...
+int fs_fd = open(fs_name, O_RDWR);
+uint16_t *fat = mmap(NULL, fat_size, PROT_READ | PROT_WRITE, MAP_SHARED, fs_fd, 0);
+Now, fat references an array.
+
+ Do not mmap the entire PennFAT file system. Remember, with FAT only the FAT is in memory. Everything else is on disk.
+
+
+2.3.6 Error Handling in Standalone PennFAT
+Within the header file, you should define some error macros for generic error handling within PennFat. Again, this implementation will be useful for alter error handling within the wider PennOS system. As a starting point, FS_NOT_MOUNTED and FILE_NOT_FOUND may be useful. You should set these errors and return values such that errors can later be propagated up the call stack.
+
+
+
+2.4 File System and Operating System Interaction
+The role of the operating system is to protect the file system from corruption as well as manipulate it by reading, writing, and deleting files. Above, you have created a reference to file descriptors referencing current open files and a global, kernel-level file descriptor table. Recall in lecture that in addition to this global FD table, each process has its own file descriptor table as well. Now using the user level interface below, you will implement routines to simulate process-level file descriptor manipulation.
+
+Note there are multiple ways you can go about implementing this. But the desired functionality is that every time a process opens a file, that should be recorded in the system-wide global FD table and also somehow be taken care of by that process itself. Also, if the file corresponding to a particular file descriptor is already open with F_WRITE or F_APPEND permissions, no other process should be able to open the same file with F_WRITE or F_APPEND permissions.
+
+Finally, even if multiple processes have the same file open under F_READ mode through calling the open function multiple times (which is allowed), they will have unique offset values. This means multiple files can read the same file concurrently and independently of each other.
+
+
+2.5 Required File System and Related User-Level System Calls
+Your operating system will provide at least the following functions for file manipulation. These are your system calls. Any routines or commands you implement in PennOS should use these functions ONLY. Note all of the following has a kernel level counterpart, and their functionality are very similar. These system calls, however, should ONLY be implemented using the kernel-level k_functions you implemented above. Even when writing to STDOUT or STDERR, you should be using k_write instead of write(2). These functions will also all utilize our “file descriptor table” we have in the calling “process”, whereas the “k_” functions described above only really interact with the system-wide open file table.
+
+s_open(const char *fname, int mode) open a file name fname with the mode mode and return a file descriptor. The allowed modes are as follows:
+
+F_WRITE - writing and reading, truncates if the file exists, or creates it if it does not exist. Only one instance of a file can be opened in F_WRITE mode; error if PennOS attempts to open a file in F_WRITE mode more than once
+F_READ - open the file for reading only, return an error if the file does not exist
+F_APPEND - open the file for reading and writing but does not truncate the file if exists; additionally, the file pointer references the end of the file.
+s_open returns a file descriptor on success and a negative value on error. What characters are allowed in filenames? You may follow the POSIX standard, linked here This open will initially be done at the kernel level, using a more intricate and already-implemented kernel level function. If the kernel level function succeeds and returns a fd, the user level function should also somehow keep track that such file descriptor is managed by the calling process. This can be done in multiple ways.
+
+s_read(int fd, int n, char *buf)
+read n bytes from the file referenced by fd. On return, s_read returns the number of bytes read, 0 if EOF is reached, or a negative number on error. A kernel level read should occur to perform the actual functionality, but its important to remember that the process’ file descriptor may need to be updated as the position of the file pointer changes.
+
+s_write(int fd, const char *str, int n)
+write n bytes of the string referenced by str to the file fd and increment the file pointer by n. On return, s_write returns the number of bytes written, or a negative value on error. Note that this writes bytes not chars, these can be anything, even '\0' A kernel level write should occur to perform the actual functionality, but its important to remember that the process’ file descriptor may need to be updated as the position of the file pointer changes.
+
+s_close(int fd)
+close the file fd and return 0 on success, or a negative value on failure. A kernel level close should occur, and on success the local process’ file descriptor table should be cleaned up appropriately.
+
+s_unlink(const char *fname)
+remove the file. Be careful how you implement this, like Linux, you should not be able to delete a file that is in use by another process. This deletion should be delegated to a kernel level function. If the file has been open by another process, you should indicate that with an error.
+
+s_lseek(int fd, int offset, int whence)
+reposition the file pointer for fd to the offset relative to whence. You must also implement the constants F_SEEK_SET, F_SEEK_CUR, and F_SEEK_END, which reference similar file whences as their similarly named counterparts in lseek(2). A kernel level lseek should occur, and necessary changes to the calling process’ file descriptor table will be necessary.
+
+s_ls(const char *filename)
+List the file filename in the current directory. If filename is NULL, list all files in the current directory. Before EC implementations, this should be very simple and could literally be a call a similar k_function.
+
+
+Feel free to implement any other system calls you need. The purpose of system calls should be to abstract out the kernel layer to the user level shell commands. Similar to what you did in the standalone pennFAT, user level shell commands you will implement in the next section, such as cat and mv should ONLY be implemented with these system calls you implement here. Also, always do your best to modularize your code. s_open and s_read should call both kernel-level subroutines and other helper functions, and not be a big block of code.
+
+
+3. Shell
+Once PennOS is booted (i.e. executed from the host OS), it will eventually create a process to run a shell (likely indirectly through INIT creating the process). You will program this shell using the PennOS user interfaces described above. Although there is not strong separation between user and kernel land, you may only use the user level functions to program your shell and programs that run in it. That is, you may only use functions prefixed with a u_ or s_.
+
+The shell is like any other spthread process running in PennOS and should be scheduled as such, except that it will always have a priority level of 0. Unlike traditional shells, it is not capable of running arbitrary programs; instead you will provide built-in programs to execute within a spthread. Below are the following features your shell should provide:
+
+Synchronous Child Waiting: PennOS does not provide a means to perform asynchronous signal handling; instead, you will use a synchronous signal handler. Before prompting for the next command, your shell will attempt to wait on all children using s_waitpid.
+
+Redirection: Your shell must handle >, <, and >> redirection; however, you are not required to have pipelines.
+Parsing: You must parse command line input, but you may use your previous implementation, or the parser provided in the previous project.
+Terminal Signaling: You should still be able to handle signals like Ctrl-Z and Ctrl-C, and neither should stop nor terminate PennOS. Instead, they must be properly relayed to the appropriate process via the user-land interface.
+Terminal Control of stdin: Just as before, you must provide protection of stdin; however, you cannot use tcsetpgrp(2) since PennOS executes as a single process on the host OS process. Instead, your PennOS should have a way to track the terminal-controlling process. Functions that read from stdin (e.g., cat), should be stopped (by them sending a P_SIGSTOP) signal if they do not have control of the terminal.
+Shutdown: PennOS should shutdown when the shell exits (e.g. when the shell reads EOF).
+The shell prompt is $.
+
+
+3.1 Shell Built-ins
+Shell built-ins are user-level programs. All built-ins described in this section should be implemented using other user-level functions (u_) or via system calls (s_) ONLY.
+
+The following shell built-in routines should run as independently scheduled PennOS processes.
+
+When in doubt, consult the behavior of these commands in your UNIX bash shell and man pages. Note that we do not expect you to implement additional features unspecified, such as additional flags for these commands.
+
+/**
+ * @brief The ususal `cat` program.
+ *
+ * If `files` arg is provided, concatenate these files and print to stdout
+ * If `files` arg is *not* provided, read from stdin and print back to stdout
+ *
+ * Example Usage: cat f1 f2 (concatenates f1 and f2 and print to stdout)
+ * Example Usage: cat f1 f2 < f3 (concatenates f1 and f2 and prints to stdout, ignores f3)
+ * Example Usage: cat < f3 (concatenates f3, prints to stdout)
+ */
+void* cat(void *arg);
+
+/**
+ * @brief Sleep for `n` seconds.
+ *
+ * Note that you'll have to convert the number of seconds to the correct number
+ * of ticks.
+ *
+ * Example Usage: sleep 10
+ */
+void* sleep(void *arg);
+
+/**
+ * @brief Busy wait indefinitely.
+ * It can only be interrupted via signals.
+ *
+ * Example Usage: busy
+ */
+void* busy(void *arg);
+
+/**
+ * @brief Echo back an input string.
+ *
+ * Example Usage: echo Hello World
+ */
+void* echo(void *arg);
+
+/**
+ * @brief Lists all files in the working directory.
+ * As an extension, it should support relative and absolute file paths.
+ *
+ * Example Usage: ls (regular credit)
+ * Example Usage: ls ../../foo/./bar/sample (only for EC)
+ */
+void* ls(void *arg);
+
+/**
+ * @brief For each file, create an empty file if it doesn't exist, else update its timestamp.
+ *
+ * Example Usage: touch f1 f2 f3 f4 f5
+ */
+void* touch(void *arg);
+
+/**
+ * @brief Rename a file. If the `dst_file` file already exists, overwrite it.
+ *
+ * Print appropriate error message if:
+ * - `src_file` is not a file that exists
+ * - `src_file` does not have read permissions
+ * - `dst_file` file already exists but does not have write permissions
+ *
+ * Example Usage: mv src_file dst_file
+ */
+void* mv(void *arg);
+
+/**
+ * Copy a file. If the `dst_file` file already exists, overwrite it.
+ *
+ * Print appropriate error message if:
+ * - `src_file` is not a file that exists
+ * - `src_file` does not have read permissions
+ * - `dst_file` file already exists but does not have write permissions
+ *
+ * Example Usage: cp src_file dst_file
+ */
+void* cp(void *arg);
+
+/**
+ * @brief Remove a list of files.
+ * Treat each file in the list as a separate transaction. (i.e. if removing
+ * file1 fails, still attempt to remove file2, file3, etc.)
+ *
+ * Print appropriate error message if:
+ * - `file` is not a file that exists
+ *
+ * Example Usage: rm f1 f2 f3 f4 f5
+ */
+void* rm(void *arg);
+
+/**
+ * @brief Change permissions of a file.
+ * There's no need to error if a permission being added already exists, or
+ * if a permission being removed is already not granted.
+ *
+ * Print appropriate error message if:
+ * - `file` is not a file that exists
+ * - `perms` is invalid
+ *
+ * Example Usage: chmod +x file (adds executable permission to file)
+ * Example Usage: chmod +rw file (adds read + write permissions to file)
+ * Example Usage: chmod -wx file (removes write + executable permissions from file)
+ */
+void* chmod(void *arg);
+
+/**
+ * @brief List all processes on PennOS, displaying PID, PPID, priority, status,
+ * and command name.
+ *
+ * Example Usage: ps
+ */
+void* ps(void *arg);
+
+/**
+ * @brief Sends a specified signal to a list of processes.
+ * If a signal name is not specified, default to "term".
+ * Valid signals are -term, -stop, and -cont.
+ *
+ * Example Usage: kill 1 2 3 (sends term to processes 1, 2, and 3)
+ * Example Usage: kill -term 1 2 (sends term to processes 1 and 2)
+ * Example Usage: kill -stop 1 2 (sends stop to processes 1 and 2)
+ * Example Usage: kill -cont 1 (sends cont to process 1)
+ */
+void* kill(void *arg);
+In order to test your zombie and orphan process handling in your kernel, you must also implement the following two built-in routines for your shell program to call:
+
+/**
+ * @brief Helper for zombify.
+ */
+void* zombie_child(void* arg) {
+  // MMMMM Brains...!
+  return;
+}
+
+/**
+ * @brief Used to test zombifying functionality of your kernel.
+ *
+ * Example Usage: zombify
+ */
+void* zombify(void* arg) {
+  s_spawn(zombie_child, ...);
+  while (1);
+  return;
+}
+
+
+
+/**
+ * @brief Helper for orphanify.
+ */
+void* orphan_child(void* arg) {
+  // Please sir,
+  // I want some more
+  while (1) ;
+}
+
+/**
+ * @brief Used to test orphanifying functionality of your kernel.
+ *
+ * Example Usage: orphanify
+ */
+void* orphanify(void* arg) {
+  s_spawn(orphan_child, ...);
+  return;
+}
+zombify and orphanify are simple shell programs that do not need to do anything besides what is given. The intended behavior is for your shell to spawn a process running zombify or orphanify, which will spawn a grandchild zombie_child or orphan_child (relative to the shell). You will use these in conjunction with your scheduler logs to demonstrate that your scheduler properly handles zombies and orphans.
+
+In addition, the following shell built-ins should be run as the shell; that is, they should each execute as a shell sub-routine directly rather than as an independent process.
+
+/**
+ * @brief Spawn a new process for `command` and set its priority to `priority`.
+ * 2. Adjust the priority level of an existing process.
+ *
+ * Example Usage: nice 2 cat f1 f2 f3 (spawns cat with priority 2)
+ */
+void* nice(void* arg);
+
+/**
+ * @brief Adjust the priority level of an existing process.
+ *
+ * Example Usage: nice_pid 0 123 (sets priority 0 to PID 123)
+ */
+void* nice_pid(void* arg);
+
+/**
+ * @brief Lists all available commands.
+ *
+ * Example Usage: man
+ */
+void* man(void* arg);
+
+/**
+ * @brief Resumes the most recently stopped job in the background, or the job
+ * specified by job_id.
+ *
+ * Example Usage: bg
+ * Example Usage: bg 2 (job_id is 2)
+ */
+void* bg(void* arg);
+
+/**
+ * @brief Brings the most recently stopped or background job to the foreground,
+ * or the job specified by job_id.
+ *
+ * Example Usage: fg
+ * Example Usage: fg 2 (job_id is 2)
+ */
+void* fg(void* arg);
+
+/**
+ * @brief Lists all jobs.
+ *
+ * Example Usage: jobs
+ */
+void* jobs(void* arg);
+
+/**
+ * @brief Exits the shell and shutsdown PennOS.
+ *
+ * Example Usage: logout
+ */
+void* logout(void* arg);
+
+3.2 Shell Scripts
+Your shell should be capable of executing scripts. For example:
+
+$ echo echo line1 >script
+$ echo echo line2 >>script
+$ cat script
+echo line1
+echo line2
+$ chmod +x script
+$ script > out
+$ cat out
+line1
+line2
+
+4. PennOS Logging
+You are required to provide logging facilities for your scheduler and kernel level functionality. The logs you produce will be used for grading, but you should also use the logs as part of your debugging and development. Any additional logging events you report should fit the formats below and should be documented in your README and companion document.
+
+All logs will have the following set format:
+
+[ticks] OPERATION ARG1 ARG2 ...
+Where ticks is the number of clock ticks since boot, OPERATION is the current scheduling procedure (e.g., swapping in a process), and the ARGS are the items being acted upon in the procedure. Your log file should be tab delimited. Note that within a single tick, there may be multiple events logged. The following events should be logged with the following formats:
+
+Schedule Event: The scheduling of a process for this clock tick.
+
+[ticks] SCHEDULE PID QUEUE PROCESS_NAME
+Process Life-Cycle Events: The scheduling of a process for this clock tick.
+
+[ticks] CREATE PID NICE_VALUE PROCESS_NAME
+[ticks] SIGNALED PID NICE_VALUE PROCESS_NAME
+[ticks] EXITED PID NICE_VALUE PROCESS_NAME
+[ticks] ZOMBIE PID NICE_VALUE PROCESS_NAME
+[ticks] ORPHAN PID NICE_VALUE PROCESS_NAME
+[ticks] WAITED PID NICE_VALUE PROCESS_NAME
+Regarding process termination states, if a process terminates because of a signal, then the SIGNALED log line should appear. If a process terminates normally (i.e. via return or exit()), then the EXITED log line should appear.
+
+Nice Event: The adjusting of the nice value for a process
+
+[ticks] NICE PID OLD_NICE_VALUE NEW_NICE_VALUE PROCESS_NAME
+Process Blocked/Unblocked: The (un)blocking of a running process
+
+[ticks] BLOCKED PID NICE_VALUE PROCESS_NAME
+[ticks] UNBLOCKED PID NICE_VALUE PROCESS_NAME
+Process Stopped/Continue: The stopping of a process
+
+[ticks] STOPPED PID NICE_VALUE PROCESS_NAME
+[ticks] CONTINUED PID NICE_VALUE PROCESS_NAME
+
+5. Arguments to PennOS
+./pennos fatfs [log_fname]
+If log_fname is not provided, logs will be written to a default file named log that will be created, if it does not already exist. Note that this log file lives on the host OS and not within a PennFAT. The fatfs argument is required and refers to the host OS file containing your PennFAT file system.
+
+
+6. Error Handling
+As before, you must check the error condition of all system calls for the host OS (e.g. read(2), malloc(2), etc.). Additionally, you must provide an error checking mechanism for the PennOS system calls.
+
+You should implement a header file similar to <errno.h>, providing your own P_ERRNO variable that is set to different integer constants based on what error occurs from a PennOS system call. You should also define a user-level function called u_perror (similar to perror(3) in Linux) that allows the shell to pass in a message describing what error occurred, which the function then concatenates to the default error message based on your P_ERRNO. The file system and the kernel should set P_ERRNO and return -1 when a PennOS system call fails, and the shell should catch this error and call u_perror to report the error that occurred.
+
+You should aim to have at least one P_ERRNO value defined for each system call in your PennOS. In your companion document, you must describe the error values each PennOS system call could set. Be mindful to not break the abstraction except for host OS system calls like malloc(2), for which you can just call perror to report the error — no need to call your own u_perror in that case.
+
+
+7. Memory Errors
+While valgrind errors can be difficult to resolve, it is possible to have a completely valgrind clean PennOS. We have included a scheduler demo that has no valgrind errors. However, due to the difficulty of this assignment, no deductions will be made for valgrind errors or memory leaks. An extension for this assignment could be to have no leaks! (And having no errors will be an even more impressive extension.) This should be very doable for those of you that have been paying attention to good practice in C coding, so please make your best effort to not ignore valgrind unless necessary and feel free to come to office hours if you need help with any errors. Additionally, if you ignore valgrind, it tends to lead to many more unpredictable errors, so it is a good idea to at least keep memory errors (especially invalid read/writes) to a minimum.
+
+
+Developing Your Code
+We highly recommend you use the course-standardized Docker Container given by course staff because all grading will be done on the course Docker Container. Please do not develop on OSX as there are significant enough differences between OSX and Unix variants such as Ubuntu Linux. If you decide to develop in a different container/machine anyway, you must compile and test your PennOS on the course-standardized Docker Container to ensure your PennOS runs as you expect.
+
+
+Repository Creation
+The repo creation gradescope assignment for Penn-OS is live, please submit a text file named account.txt and have it be in the form:
+
+<group number>
+<github account 1>
+<github account 2>
+<github account 3>
+<github account 4> 
+The group number comes from your PennOS canvas group. Only one member of the group needs to do this. This is also not how you register your PennOS group, make sure you are distributed into canvas groups correctly before doing this.
